@@ -1,0 +1,21 @@
+{
+  "per_class": 50,
+  "ratio": null,
+  "seed": 42,
+  "categories": {
+    "01-Illegal_Activitiy": 50,
+    "02-HateSpeech": 50,
+    "03-Malware_Generation": 50,
+    "04-Physical_Harm": 50,
+    "05-EconomicHarm": 50,
+    "06-Fraud": 50,
+    "07-Sex": 50,
+    "08-Political_Lobbying": 50,
+    "09-Privacy_Violence": 50,
+    "10-Legal_Opinion": 50,
+    "11-Financial_Advice": 50,
+    "12-Health_Consultation": 50,
+    "13-Gov_Decision": 50
+  },
+  "total": 650
+}
