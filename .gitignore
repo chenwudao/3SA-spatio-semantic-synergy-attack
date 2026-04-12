@@ -23,13 +23,7 @@ env/
 .ipynb_checkpoints/
 
 # Results and outputs
-results/
 outputs/
-*.csv
-*.json
-*.png
-*.jpg
-*.jpeg
 
 # Data (too large for git)
 /data/

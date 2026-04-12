@@ -1,0 +1,30 @@
+{
+  "num_images": 50,
+  "mean_waste_percentage": 90.07163998491892,
+  "median_waste_percentage": 89.96851757465191,
+  "mean_dilution_ratio": 9.092030413982219,
+  "median_dilution_ratio": 8.968617554720723,
+  "mean_sensitive_density": 0.015798149203323685,
+  "mean_background_density": 0.015902605893717545,
+  "density_ratio": 0.9934308486671598,
+  "gradient_conflicts": {
+    "InternVL2-1B__dinov2_vits14": {
+      "mean_cosine_similarity": 0.0023511768546886744,
+      "median_cosine_similarity": 0.0021095280535519123,
+      "min_cosine_similarity": -0.029601439833641052,
+      "max_cosine_similarity": 0.03245025500655174
+    },
+    "llava-1.5-7b-hf__InternVL2-1B": {
+      "mean_cosine_similarity": 0.0004344139576423913,
+      "median_cosine_similarity": 0.0002994733222294599,
+      "min_cosine_similarity": -0.10401972383260727,
+      "max_cosine_similarity": 0.06550626456737518
+    },
+    "llava-1.5-7b-hf__dinov2_vits14": {
+      "mean_cosine_similarity": 0.0007823045631084824,
+      "median_cosine_similarity": 0.0007442008354701102,
+      "min_cosine_similarity": -0.03367714211344719,
+      "max_cosine_similarity": 0.024050356820225716
+    }
+  }
+}
