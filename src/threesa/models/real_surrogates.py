@@ -40,6 +40,9 @@ class InternVLSurrogate(VisionLanguageSurrogate):
     InternVL Surveillance via Transformers with trust_remote_code.
     Extracts the global vision-encoder self-attention map from InternViT.
     Uses dynamic res blocking, simplified here for stage 1 (1x1 block).
+
+    Input: Expects pre-resized 336x336 tensor from the dataset.
+    Transform only applies normalization (no resize) to preserve spatial alignment.
     """
     def __init__(self, model_id: str = "OpenGVLab/InternVL2-1B", weight: float = 1.0, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
         name = model_id.split("/")[-1]
@@ -58,20 +61,15 @@ class InternVLSurrogate(VisionLanguageSurrogate):
                 attn_implementation="eager",  # Required for output_attentions=True
             ).to(self.device).eval()
 
-        # InternVL normally expects 448x448 squares
+        # Only normalize, no resize — input is already 336x336
         self.transform = T.Compose([
-            T.Resize((448, 448)),
-            T.ToTensor(),
             T.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
         ])
 
     def extract_attention(self, image: torch.Tensor, text_prompt: str) -> AttentionOutput:
         b, c, h, w = image.shape
-        img_np = (image[0].permute(1, 2, 0).numpy() * 255).astype("uint8")
-        pil_img = Image.fromarray(img_np)
-
-        # Single block 448x448 for stage 1 (IoU analysis on standard input)
-        pixel_values = self.transform(pil_img).unsqueeze(0).to(self.device, torch.float16)
+        # Input is already 336x336, just normalize
+        pixel_values = self.transform(image).to(self.device, torch.float16)
 
         with torch.no_grad():
             # InternVL vision_model doesn't support output_attentions,
@@ -105,12 +103,12 @@ class InternVLSurrogate(VisionLanguageSurrogate):
             avg_cls_attn = cls_attn.mean(dim=1)  # average over heads -> (1, num_patches)
 
             num_patches = avg_cls_attn.shape[1]
-            grid_size = int(math.sqrt(num_patches))
+            grid_size = int(round(math.sqrt(num_patches)))
 
             attn_map = avg_cls_attn.reshape(1, 1, grid_size, grid_size).float()
 
-            # Resize back to original dimension (h, w)
-            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bilinear', align_corners=False)
+            # Resize to original dimension (h, w) using bicubic for smoother upsampling
+            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bicubic', align_corners=False)
 
             attn_min = attn_map_resized.amin(dim=(2, 3), keepdim=True)
             attn_max = attn_map_resized.amax(dim=(2, 3), keepdim=True)
@@ -118,11 +116,25 @@ class InternVLSurrogate(VisionLanguageSurrogate):
 
         return AttentionOutput(
             attention_map=attn_norm.cpu(),
-            metadata={"source": "internvl_vision", "heads_averaged": True}
+            metadata={"source": "internvl_vision", "heads_averaged": True, "input_res": 336, "grid_size": grid_size}
         )
 
     def compute_loss(self, image: torch.Tensor, text_prompt: str) -> LossOutput:
-        raise NotImplementedError
+        """Compute attack loss for InternVL vision tower.
+
+        Feature attack: maximize disruption of InternViT embeddings.
+        """
+        b, c, h, w = image.shape
+        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        pixel_values = (image - mean) / std
+
+        # InternVL vision_model may not support output_hidden_states
+        vision_outputs = self.model.vision_model(pixel_values=pixel_values.to(torch.float16))
+        hidden_states = vision_outputs.last_hidden_state
+        loss = -hidden_states.norm(p=2, dim=-1).sum()
+
+        return LossOutput(loss=loss, metadata={"method": "internvl_feature_norm"})
 
 class LLaVASurrogate(VisionLanguageSurrogate):
     """
@@ -185,13 +197,13 @@ class LLaVASurrogate(VisionLanguageSurrogate):
             
             # In CLIP-ViT-L/14 the patch count is 576 for 336x336 input (24x24)
             num_patches = avg_cls_attn.shape[1]
-            grid_size = int(math.sqrt(num_patches))
-            
+            grid_size = int(round(math.sqrt(num_patches)))
+
             attn_map = avg_cls_attn.reshape(b, 1, grid_size, grid_size).float()
-            
-            # Resize back to original
-            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bilinear', align_corners=False)
-            
+
+            # Resize to original using bicubic for smoother upsampling
+            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bicubic', align_corners=False)
+
             # Normalize to [0,1]
             attn_min = attn_map_resized.amin(dim=(2, 3), keepdim=True)
             attn_max = attn_map_resized.amax(dim=(2, 3), keepdim=True)
@@ -199,16 +211,44 @@ class LLaVASurrogate(VisionLanguageSurrogate):
 
         return AttentionOutput(
             attention_map=attn_norm.cpu(),
-            metadata={"source": "llava_vision", "heads_averaged": True}
+            metadata={"source": "llava_vision", "heads_averaged": True, "input_res": 336, "grid_size": grid_size}
         )
 
     def compute_loss(self, image: torch.Tensor, text_prompt: str) -> LossOutput:
-        raise NotImplementedError
+        """Compute attack loss for PGD adversarial perturbation generation.
+
+        Uses the LLaVA vision tower features directly from the input tensor
+        (preserving gradient flow) to create an adversarial loss.
+
+        Strategy: Feature attack — maximize disruption of vision tower embeddings.
+        Uses mean of squared features for numerical stability with float16 models.
+        """
+        b, c, h, w = image.shape
+
+        # The input image is [0, 1] tensor. We need to normalize it for the vision tower.
+        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        pixel_values = (image - mean) / std
+
+        # Convert to float16 to match model dtype (required for numerical stability)
+        pixel_values = pixel_values.to(torch.float16)
+
+        vision_tower = self.model.vision_tower
+        vision_outputs = vision_tower(pixel_values, output_hidden_states=True, return_dict=True)
+        hidden_states = vision_outputs.last_hidden_state  # (batch, seq_len, hidden_dim)
+
+        # Use mean of squared features (more stable than norm for float16)
+        loss = -(hidden_states.float() ** 2).mean()
+
+        return LossOutput(loss=loss, metadata={"method": "feature_sq_attack"})
 
 class DINOv2Surrogate(VisionLanguageSurrogate):
     """
     DINOv2 as a pure vision baseline (no text prompt).
     Extracts attention from the [CLS] token of the final layer.
+
+    Input: Expects pre-resized 336x336 tensor from the dataset.
+    Transform only applies normalization (no resize/crop) to preserve spatial alignment.
     """
     def __init__(self, name: str = "dinov2_vits14", weight: float = 1.0, device: str = "cuda" if torch.cuda.is_available() else "cpu"):
         super().__init__(name=name, weight=weight)
@@ -216,35 +256,19 @@ class DINOv2Surrogate(VisionLanguageSurrogate):
         # Load dinov2 directly from torch hub
         self.model = torch.hub.load("facebookresearch/dinov2", name).to(self.device).eval()
 
-        # DINOv2 transform
-        self.transform = T.Compose([
-            T.Resize(256),
-            T.CenterCrop(224),
-            T.ToTensor(),
-            T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-        ])
-
         # Patch size is 14 for vits14
         self.patch_size = 14
 
     def extract_attention(self, image: torch.Tensor, text_prompt: str = "") -> AttentionOutput:
         """
-        Since DINOv2 doesn't use text, prompt is ignored.
-        image is assumed to be raw tensor. We apply DINOv2 transforms inside.
-        If your dataset already resizes/normalizes, you may bypass this.
-        For now, let's normalize exactly for dinov2.
-        Wait, `image` from our dataset is a tensor in [0, 1] sized roughly (batch, 3, 336, 336).
-        DINOv2 requires 224x224 (or divisible by patch_size 14).
+        Input is already 336x336 tensor in [0, 1].
+        Only apply ImageNet normalization, no resize/crop.
         """
-        # Let's ensure tensor is correctly shaped and normalized for DINO
         b, c, h, w = image.shape
-        # To make it compatible, we can interpolate to 224x224
-        # and then normalize using imagenet means
-        img_resized = torch.nn.functional.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
-        mean = torch.tensor([0.485, 0.456, 0.406], device=img_resized.device).view(1, 3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225], device=img_resized.device).view(1, 3, 1, 1)
-        img_norm = (img_resized - mean) / std
-
+        # Normalize using ImageNet stats (DINOv2 training distribution)
+        mean = torch.tensor([0.485, 0.456, 0.406], device=image.device).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=image.device).view(1, 3, 1, 1)
+        img_norm = (image - mean) / std
         img_norm = img_norm.to(self.device)
 
         with torch.no_grad():
@@ -281,12 +305,12 @@ class DINOv2Surrogate(VisionLanguageSurrogate):
             # Average across heads
             avg_cls_attention = cls_attention.mean(dim=1)  # [batch, num_tokens-1]
 
-            # Reshape to feature map
-            num_patches = 224 // self.patch_size
+            # Reshape to feature map (336 / 14 = 24)
+            num_patches = h // self.patch_size
             attn_map = avg_cls_attention.reshape(b, 1, num_patches, num_patches)
 
-            # Interpolate back to original image size
-            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bilinear', align_corners=False)
+            # Interpolate to original image size using bicubic
+            attn_map_resized = torch.nn.functional.interpolate(attn_map, size=(h, w), mode='bicubic', align_corners=False)
 
             # Normalize to [0,1]
             attn_min = attn_map_resized.amin(dim=(2, 3), keepdim=True)
@@ -295,9 +319,21 @@ class DINOv2Surrogate(VisionLanguageSurrogate):
 
         return AttentionOutput(
             attention_map=attn_norm.cpu(),
-            metadata={"source": "dinov2", "heads_averaged": True}
+            metadata={"source": "dinov2", "heads_averaged": True, "input_res": 336, "grid_size": num_patches}
         )
 
     def compute_loss(self, image: torch.Tensor, text_prompt: str) -> LossOutput:
-        raise NotImplementedError("Loss calculation for DINO baseline not implemented for stage 1")
+        """Compute attack loss for DINOv2 vision tower.
+
+        Feature attack: maximize disruption of DINOv2 embeddings.
+        """
+        b, c, h, w = image.shape
+        mean = torch.tensor([0.485, 0.456, 0.406], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=image.device, dtype=image.dtype).view(1, 3, 1, 1)
+        pixel_values = (image - mean) / std
+
+        hidden_states = self.model(pixel_values.to(torch.float32))
+        loss = -hidden_states.norm(p=2, dim=-1).sum()
+
+        return LossOutput(loss=loss, metadata={"method": "dinov2_feature_norm"})
 
