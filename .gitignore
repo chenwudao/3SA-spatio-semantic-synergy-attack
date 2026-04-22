@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Results and outputs
+outputs/
+
+# Data (tracked via LFS)
+# (no longer ignored)
+
+# Temp files
+.tmp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Qwen
+.qwen/
