@@ -115,7 +115,7 @@ class InternVLSurrogate(VisionLanguageSurrogate):
             attn_norm = (attn_map_resized - attn_min) / (attn_max - attn_min + 1e-8)
 
         return AttentionOutput(
-            attention_map=attn_norm.cpu(),
+            attention_map=attn_norm,
             metadata={"source": "internvl_vision", "heads_averaged": True, "input_res": 336, "grid_size": grid_size}
         )
 
@@ -160,7 +160,7 @@ class LLaVASurrogate(VisionLanguageSurrogate):
         # Alternatively, we can feed pixel values directly, but it's safer to use the processor.
         b, c, h, w = image.shape
         # Assuming batch size = 1 for stage 1.
-        img_np = (image[0].permute(1, 2, 0).numpy() * 255).astype("uint8")
+        img_np = (image[0].detach().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
         pil_img = Image.fromarray(img_np)
         
         # Format conversation for LLaVA
@@ -210,7 +210,7 @@ class LLaVASurrogate(VisionLanguageSurrogate):
             attn_norm = (attn_map_resized - attn_min) / (attn_max - attn_min + 1e-8)
 
         return AttentionOutput(
-            attention_map=attn_norm.cpu(),
+            attention_map=attn_norm,
             metadata={"source": "llava_vision", "heads_averaged": True, "input_res": 336, "grid_size": grid_size}
         )
 
@@ -318,7 +318,7 @@ class DINOv2Surrogate(VisionLanguageSurrogate):
             attn_norm = (attn_map_resized - attn_min) / (attn_max - attn_min + 1e-8)
 
         return AttentionOutput(
-            attention_map=attn_norm.cpu(),
+            attention_map=attn_norm,
             metadata={"source": "dinov2", "heads_averaged": True, "input_res": 336, "grid_size": num_patches}
         )
 

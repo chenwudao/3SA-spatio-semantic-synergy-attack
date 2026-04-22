@@ -164,7 +164,7 @@ def combine_attention_maps(
     elif strategy == "weighted_topk":
         weights = torch.tensor(
             [surrogate.weight for surrogate in surrogates],
-            device=image.device,
+            device=stacked.device,
             dtype=stacked.dtype,
         ).view(-1, 1, 1, 1, 1)
         combined = (stacked * weights).sum(dim=0) / weights.sum()

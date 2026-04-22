@@ -11,6 +11,13 @@ class AttackConfig:
     iterations_per_stage: int = 5
     topk_ratio: float = 0.10
     mask_strategy: str = "weighted_topk"
+    gradient_strategy: str = "pcgrad"
+    use_soft_mask: bool = True
+    soft_mask_expansion: float = 1.5
+    soft_mask_sigma: float = 3.0
+    soft_mask_temperature: float = 10.0
+    normalize_gradients: bool = True
+    shuffle_pcgrad: bool = True
     device: str = "cuda"
 
 
